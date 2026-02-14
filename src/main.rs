@@ -1,8 +1,7 @@
 pub mod orderbook;
 
-use std::sync::atomic::AtomicU64;
-
 use rand::{RngExt, random_bool};
+use std::time::SystemTime;
 use tracing::info;
 
 use crate::orderbook::{book::OrderBook, side::Side};
@@ -10,6 +9,7 @@ use crate::orderbook::{book::OrderBook, side::Side};
 fn main() {
     let starting_price = 54321; //$543.21
     //Timestamp when starting
+    println!("Starting simuliation {:?}", SystemTime::now());
 
     //Create orderbook
 
@@ -21,8 +21,7 @@ fn main() {
 
     for i in 0..1_000_000 {
         // randomly add an order for some price
-        let quantity_num = rng.random_range(10..100_000);
-        let quantity = AtomicU64::new(quantity_num);
+        let quantity = rng.random_range(10..100_000);
 
         let neg = random_bool(0.5);
         let random_price = rng.random_range(0..70);
@@ -48,6 +47,7 @@ fn main() {
     }
 
     //Timestamp when ending
+    println!("Ending simuliation {:?}", SystemTime::now());
 
     println!("Added Orders I guess we're done at ");
 }

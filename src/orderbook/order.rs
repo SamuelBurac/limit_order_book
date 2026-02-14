@@ -1,19 +1,12 @@
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-
 use crate::orderbook::side::Side;
 
 pub struct LimitOrder {
     pub order_id: u64,
     pub side: Side,
     pub price: u128,
-    pub quantity: AtomicU64,
+    pub quantity: u64,
 }
-impl LimitOrder {
-    pub fn reduce_quantity(&mut self, amount: u64) {
-        self.quantity.fetch_sub(amount, Ordering::Relaxed);
-    }
-}
+impl LimitOrder {}
 
 impl Clone for LimitOrder {
     fn clone(&self) -> Self {
@@ -21,7 +14,7 @@ impl Clone for LimitOrder {
             order_id: self.order_id,
             side: self.side.clone(),
             price: self.price,
-            quantity: AtomicU64::new(self.quantity.load(Ordering::Relaxed)),
+            quantity: self.quantity,
         }
     }
 }
@@ -32,7 +25,7 @@ impl PartialEq for LimitOrder {
         self.order_id == other.order_id
             && self.side == other.side
             && self.price == other.price
-            && self.quantity.load(Ordering::Relaxed) == other.quantity.load(Ordering::Relaxed)
+            && self.quantity == other.quantity
     }
 }
 
