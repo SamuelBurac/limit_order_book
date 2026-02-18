@@ -1,6 +1,6 @@
 // This will hold all the orders and execute trades?
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fs::File, io::Write};
 
 use skiplist::OrderedSkipList;
 
@@ -32,6 +32,149 @@ impl OrderBook {
         // look for matching orders
         match_orders(self, order);
     }
+
+    pub fn write_state_to_file(&mut self, file_name: &str) {
+        let res = File::create(file_name);
+        if let Ok(mut file) = res {
+            // Write header
+            writeln!(&mut file, "# Order Book State Report\n").unwrap();
+            writeln!(
+                &mut file,
+                "Generated at: {:?}\n",
+                std::time::SystemTime::now()
+            )
+            .unwrap();
+
+            // Write summary statistics
+            writeln!(&mut file, "## Summary\n").unwrap();
+            writeln!(
+                &mut file,
+                "- **Active Buy Orders**: {}",
+                self.buy_orders.len()
+            )
+            .unwrap();
+            writeln!(
+                &mut file,
+                "- **Active Sell Orders**: {}",
+                self.sell_orders.len()
+            )
+            .unwrap();
+            writeln!(
+                &mut file,
+                "- **Completed Orders**: {}",
+                self.completed_orders.len()
+            )
+            .unwrap();
+            writeln!(
+                &mut file,
+                "- **Completed Transactions**: {}\n",
+                self.completed_transactions.len()
+            )
+            .unwrap();
+
+            // Write active buy orders
+            writeln!(&mut file, "## Active Buy Orders\n").unwrap();
+            if self.buy_orders.is_empty() {
+                writeln!(&mut file, "*No active buy orders*").unwrap();
+            } else {
+                writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
+                writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
+                for order in self.buy_orders.iter() {
+                    writeln!(
+                        &mut file,
+                        "| {} | {:?} | ${:.2} | {} |",
+                        order.order_id,
+                        order.side,
+                        order.price as f64 / 100.0,
+                        order.quantity
+                    )
+                    .unwrap();
+                }
+            }
+
+            // Write active sell orders
+            writeln!(&mut file, "\n## Active Sell Orders\n").unwrap();
+            if self.sell_orders.is_empty() {
+                writeln!(&mut file, "*No active sell orders*").unwrap();
+            } else {
+                writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
+                writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
+                for order in self.sell_orders.iter() {
+                    writeln!(
+                        &mut file,
+                        "| {} | {:?} | ${:.2} | {} |",
+                        order.order_id,
+                        order.side,
+                        order.price as f64 / 100.0,
+                        order.quantity
+                    )
+                    .unwrap();
+                }
+            }
+
+            // Write completed orders
+            writeln!(&mut file, "\n## Completed Orders\n").unwrap();
+            if self.completed_orders.is_empty() {
+                writeln!(&mut file, "*No completed orders*").unwrap();
+            } else {
+                writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
+                writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
+                for order in &self.completed_orders {
+                    writeln!(
+                        &mut file,
+                        "| {} | {:?} | ${:.2} | {} |",
+                        order.order_id,
+                        order.side,
+                        order.price as f64 / 100.0,
+                        order.quantity
+                    )
+                    .unwrap();
+                }
+            }
+
+            // Write completed transactions
+            writeln!(&mut file, "\n## Completed Transactions\n").unwrap();
+            if self.completed_transactions.is_empty() {
+                writeln!(&mut file, "*No completed transactions*").unwrap();
+            } else {
+                writeln!(
+                    &mut file,
+                    "| Transaction ID | Buy Order IDs | Sell Order IDs |"
+                )
+                .unwrap();
+                writeln!(
+                    &mut file,
+                    "|----------------|---------------|----------------|"
+                )
+                .unwrap();
+
+                for transaction in self.completed_transactions.values() {
+                    let buy_ids = transaction
+                        .buy_order_ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let sell_ids = transaction
+                        .sell_order_ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(
+                        &mut file,
+                        "| {} | {} | {} |",
+                        transaction.transaction_id, buy_ids, sell_ids
+                    )
+                    .unwrap();
+                }
+            }
+
+            tracing::info!("Successfully wrote order book state to {}", file_name);
+        } else {
+            tracing::error!("Failed to create file {}", file_name);
+        }
+    }
 }
 
 fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
@@ -61,6 +204,10 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             // Find the orders that are matching
             for (idx, buy_order) in buy_orders {
                 let quantity_left = starting_quantity - quantity_sold;
+                if quantity_left == 0 {
+                    break;
+                }
+
                 let buy_order_quantity = buy_order.quantity;
 
                 // Fullfilling the whole buy order
@@ -131,11 +278,68 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             // I assume they're ordered in most to least?
             // Also if I'm doing filtering why even use a skiplist?
             // would probably be better if I also did binary search to have match_orders be O(log n)
-            let buy_orders = order_book
-                .buy_orders
+            let sell_orders = order_book
+                .sell_orders
                 .iter()
+                .rev()
                 .enumerate()
-                .filter(|(_, buy)| buy.price > order.price);
+                .filter(|(_, sell)| sell.price < order.price);
+
+            for (idx, sell_order) in sell_orders {
+                let quantity_left = starting_quantity - quantity_sold;
+                if quantity_left == 0 {
+                    break;
+                }
+                let buy_order_quantity = sell_order.quantity;
+
+                // Fullfilling the whole buy order
+                if quantity_left >= buy_order_quantity {
+                    quantity_sold += buy_order_quantity;
+
+                    order_idxs_to_remove.push(idx);
+                } else if quantity_left < buy_order_quantity {
+                    quantity_sold += quantity_left;
+                    partial_quantity_fulfilled = quantity_left;
+                    partially_filled_order_index = Some(idx);
+                }
+            }
+
+            // update the partially filled order
+            if let Some(order_idx) = partially_filled_order_index {
+                // Get order
+                let mut order = order_book.sell_orders.remove_index(order_idx);
+
+                // add to transaction
+                transaction.sell_order_ids.push(order.order_id);
+
+                //update order
+                order.quantity -= partial_quantity_fulfilled;
+
+                // Add back to orders
+                order_book.sell_orders.insert(order);
+            }
+
+            // fulfill the order
+            for order_idx in order_idxs_to_remove {
+                let completed_order = order_book.buy_orders.remove_index(order_idx);
+                transaction.buy_order_ids.push(completed_order.order_id);
+
+                order_book.completed_orders.push(completed_order);
+            }
+
+            // if there was no sell orders fulfilled don't record the transaction
+            if !transaction.sell_order_ids.is_empty() {
+                order_book
+                    .completed_transactions
+                    .insert(transaction.transaction_id, transaction);
+            }
+
+            if starting_quantity == quantity_sold {
+                // completed this sell order fully
+                order_book.completed_orders.push(order);
+            } else {
+                order_book.buy_orders.insert(order);
+            }
         }
     }
 }

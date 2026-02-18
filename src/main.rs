@@ -1,15 +1,18 @@
 pub mod orderbook;
 
+use chrono::{DateTime, Local};
 use rand::{RngExt, random_bool};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 
 use crate::orderbook::{book::OrderBook, side::Side};
 
 fn main() {
     let starting_price = 54321; //$543.21
+    let start_time = SystemTime::now();
+    let date_time: DateTime<Local> = start_time.into();
     //Timestamp when starting
-    println!("Starting simuliation {:?}", SystemTime::now());
+    println!("Starting simuliation {}", date_time);
 
     //Create orderbook
 
@@ -46,8 +49,14 @@ fn main() {
         info!("Adding order {i}");
     }
 
+    let end_time = SystemTime::now();
+    let time_since = end_time.duration_since(start_time);
     //Timestamp when ending
-    println!("Ending simuliation {:?}", SystemTime::now());
+    println!("Ending simuliation {:?}", time_since);
 
-    println!("Added Orders I guess we're done at ");
+    // write orderbook state to file with timestamp
+    let timestamp = end_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let filename = format!("orderbook_state_{}.md", timestamp);
+    orderbook.write_state_to_file(&filename);
+    println!("Order book state written to {}", filename);
 }
