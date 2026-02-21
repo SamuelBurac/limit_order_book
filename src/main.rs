@@ -7,7 +7,15 @@ use tracing::info;
 
 use crate::orderbook::{book::OrderBook, side::Side};
 
-fn main() {
+use tracing_subscriber::FmtSubscriber;
+
+#[tokio::main]
+pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Construct a subscriber that prints formatted traces to stdout
+    let subscriber = FmtSubscriber::new();
+
+    // Use that subscriber to process traces emitted after this point
+    tracing::subscriber::set_global_default(subscriber)?;
     let starting_price = 54321; //$543.21
     let start_time = SystemTime::now();
     let date_time: DateTime<Local> = start_time.into();
@@ -17,6 +25,7 @@ fn main() {
     //Create orderbook
 
     let mut orderbook = OrderBook::new();
+    tracing::info!("Created orderbook");
 
     //add 1 million orders and see what happens I guess
     // super basic but we can do multi threaded later
@@ -59,4 +68,6 @@ fn main() {
     let filename = format!("orderbook_state_{}.md", timestamp);
     orderbook.write_state_to_file(&filename);
     println!("Order book state written to {}", filename);
+
+    Ok(())
 }

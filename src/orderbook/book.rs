@@ -2,13 +2,13 @@
 
 use std::{collections::HashMap, fs::File, io::Write};
 
-use skiplist::OrderedSkipList;
+use skiplist::SkipMap;
 
 use crate::orderbook::{order::LimitOrder, side::Side, transaction::Transaction};
 
 pub struct OrderBook {
-    buy_orders: OrderedSkipList<LimitOrder>,
-    sell_orders: OrderedSkipList<LimitOrder>,
+    buy_orders: SkipMap<u64, LimitOrder>,
+    sell_orders: SkipMap<u64, LimitOrder>,
     completed_transactions: HashMap<u64, Transaction>,
     completed_orders: Vec<LimitOrder>,
 }
@@ -22,8 +22,8 @@ impl Default for OrderBook {
 impl OrderBook {
     pub fn new() -> Self {
         Self {
-            buy_orders: OrderedSkipList::new(),
-            sell_orders: OrderedSkipList::new(),
+            buy_orders: SkipMap::new(),
+            sell_orders: SkipMap::new(),
             completed_transactions: HashMap::new(),
             completed_orders: Vec::new(),
         }
@@ -79,7 +79,7 @@ impl OrderBook {
             } else {
                 writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
                 writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
-                for order in self.buy_orders.iter() {
+                for order in self.buy_orders.values() {
                     writeln!(
                         &mut file,
                         "| {} | {:?} | ${:.2} | {} |",
@@ -99,7 +99,7 @@ impl OrderBook {
             } else {
                 writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
                 writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
-                for order in self.sell_orders.iter() {
+                for order in self.sell_orders.values() {
                     writeln!(
                         &mut file,
                         "| {} | {:?} | ${:.2} | {} |",
@@ -187,22 +187,21 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             let mut quantity_sold = 0;
 
             // partially fulfilled order
-            let mut partially_filled_order_index: Option<usize> = None;
+            let mut partially_filled_order_id: Option<u64> = None;
             let mut partial_quantity_fulfilled: u64 = 0;
 
-            let mut order_idxs_to_remove: Vec<usize> = Vec::new();
+            let mut order_ids_to_remove: Vec<u64> = Vec::new();
 
             // I assume they're ordered in most to least?
             // Also if I'm doing filtering why even use a skiplist?
             // would probably be better if I also did binary search to have match_orders be O(log n)
             let buy_orders = order_book
                 .buy_orders
-                .iter()
-                .enumerate()
-                .filter(|(_, buy)| buy.price > order.price);
+                .values()
+                .filter(|buy| buy.price > order.price);
 
             // Find the orders that are matching
-            for (idx, buy_order) in buy_orders {
+            for buy_order in buy_orders {
                 let quantity_left = starting_quantity - quantity_sold;
                 if quantity_left == 0 {
                     break;
@@ -214,7 +213,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 if quantity_left >= buy_order_quantity {
                     quantity_sold += buy_order_quantity;
 
-                    order_idxs_to_remove.push(idx);
+                    order_ids_to_remove.push(buy_order.order_id);
 
                     // Fulfilling it partially
                     // one sell order can only partially fill one buy order
@@ -222,31 +221,34 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 } else if quantity_left < buy_order_quantity {
                     quantity_sold += quantity_left;
                     partial_quantity_fulfilled = quantity_left;
-                    partially_filled_order_index = Some(idx);
+                    partially_filled_order_id = Some(buy_order.order_id);
                 }
             }
 
             // update the partially filled order
-            if let Some(order_idx) = partially_filled_order_index {
+            if let Some(order_id) = partially_filled_order_id {
                 // Get order
-                let mut order = order_book.buy_orders.remove_index(order_idx);
+                if let Some(mut order) = order_book.buy_orders.remove(&order_id) {
+                    // add to transaction
+                    transaction.buy_order_ids.push(order.order_id);
+                    //update order
+                    order.quantity -= partial_quantity_fulfilled;
 
-                // add to transaction
-                transaction.buy_order_ids.push(order.order_id);
-
-                //update order
-                order.quantity -= partial_quantity_fulfilled;
-
-                // Add back to orders
-                order_book.buy_orders.insert(order);
+                    // Add back to orders
+                    order_book.buy_orders.insert(order.order_id, order);
+                } else {
+                    tracing::error!("Failed to remove order");
+                }
             }
 
             // fulfill the order
-            for order_idx in order_idxs_to_remove {
-                let completed_order = order_book.buy_orders.remove_index(order_idx);
-                transaction.buy_order_ids.push(completed_order.order_id);
-
-                order_book.completed_orders.push(completed_order);
+            for order_id in order_ids_to_remove {
+                if let Some(completed_order) = order_book.buy_orders.remove(&order_id) {
+                    transaction.buy_order_ids.push(completed_order.order_id);
+                    order_book.completed_orders.push(completed_order);
+                } else {
+                    tracing::error!("Failed to remove order");
+                }
             }
 
             if !transaction.buy_order_ids.is_empty() {
@@ -259,7 +261,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 // completed this sell order fully
                 order_book.completed_orders.push(order);
             } else {
-                order_book.sell_orders.insert(order);
+                order_book.sell_orders.insert(order.order_id, order);
             }
         }
         Side::Buy => {
@@ -270,22 +272,21 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             let mut quantity_sold = 0;
 
             // partially fulfilled order
-            let mut partially_filled_order_index: Option<usize> = None;
+            let mut partially_filled_order_id: Option<u64> = None;
             let mut partial_quantity_fulfilled: u64 = 0;
 
-            let mut order_idxs_to_remove: Vec<usize> = Vec::new();
+            let mut order_ids_to_remove: Vec<u64> = Vec::new();
 
             // I assume they're ordered in most to least?
             // Also if I'm doing filtering why even use a skiplist?
             // would probably be better if I also did binary search to have match_orders be O(log n)
             let sell_orders = order_book
                 .sell_orders
-                .iter()
+                .values()
                 .rev()
-                .enumerate()
-                .filter(|(_, sell)| sell.price < order.price);
+                .filter(|sell| sell.price < order.price);
 
-            for (idx, sell_order) in sell_orders {
+            for sell_order in sell_orders {
                 let quantity_left = starting_quantity - quantity_sold;
                 if quantity_left == 0 {
                     break;
@@ -296,35 +297,36 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 if quantity_left >= buy_order_quantity {
                     quantity_sold += buy_order_quantity;
 
-                    order_idxs_to_remove.push(idx);
+                    order_ids_to_remove.push(sell_order.order_id);
                 } else if quantity_left < buy_order_quantity {
                     quantity_sold += quantity_left;
                     partial_quantity_fulfilled = quantity_left;
-                    partially_filled_order_index = Some(idx);
+                    partially_filled_order_id = Some(sell_order.order_id);
                 }
             }
 
             // update the partially filled order
-            if let Some(order_idx) = partially_filled_order_index {
+            if let Some(order_id) = partially_filled_order_id {
                 // Get order
-                let mut order = order_book.sell_orders.remove_index(order_idx);
+                if let Some(mut order) = order_book.sell_orders.remove(&order_id) {
+                    // add to transaction
+                    transaction.sell_order_ids.push(order.order_id);
 
-                // add to transaction
-                transaction.sell_order_ids.push(order.order_id);
+                    //update order
+                    order.quantity -= partial_quantity_fulfilled;
 
-                //update order
-                order.quantity -= partial_quantity_fulfilled;
-
-                // Add back to orders
-                order_book.sell_orders.insert(order);
+                    // Add back to orders
+                    order_book.sell_orders.insert(order.order_id, order);
+                }
             }
 
             // fulfill the order
-            for order_idx in order_idxs_to_remove {
-                let completed_order = order_book.buy_orders.remove_index(order_idx);
-                transaction.buy_order_ids.push(completed_order.order_id);
+            for order_id in order_ids_to_remove {
+                if let Some(completed_order) = order_book.buy_orders.remove(&order_id) {
+                    transaction.buy_order_ids.push(completed_order.order_id);
 
-                order_book.completed_orders.push(completed_order);
+                    order_book.completed_orders.push(completed_order);
+                }
             }
 
             // if there was no sell orders fulfilled don't record the transaction
@@ -338,7 +340,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 // completed this sell order fully
                 order_book.completed_orders.push(order);
             } else {
-                order_book.buy_orders.insert(order);
+                order_book.buy_orders.insert(order.order_id, order);
             }
         }
     }
