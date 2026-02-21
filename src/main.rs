@@ -55,7 +55,6 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             price,
             quantity,
         });
-        info!("Adding order {i}");
     }
 
     let end_time = SystemTime::now();
