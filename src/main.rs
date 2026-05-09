@@ -3,7 +3,6 @@ pub mod orderbook;
 use chrono::{DateTime, Local};
 use rand::{RngExt, random_bool};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::info;
 
 use crate::orderbook::{book::OrderBook, side::Side};
 
