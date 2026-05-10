@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::ops::Index;
+use std::ops::Index as _;
 use std::rc::{Rc, Weak};
 
 #[derive(Debug)]
@@ -19,6 +19,7 @@ pub struct LineItemQueue {
 }
 
 const DEFAULT_INIT_CAPACITY: usize = 100;
+const DEFAULT_MAX_USAGE_PERCENT: f64 = 0.75;
 
 /** A numberline which is a list of lists
 * Each entry in the list represents a price.
@@ -29,8 +30,8 @@ const DEFAULT_INIT_CAPACITY: usize = 100;
 */
 #[derive(Debug)]
 pub struct NumberLine {
-    max: u64,
-    min: u64,
+    head: Option<Weak<LineItemQueue>>,
+    tail: Option<Weak<LineItemQueue>>,
     items: Vec<Option<Rc<LineItemQueue>>>,
     size: usize,
     capacity: usize,
@@ -69,8 +70,8 @@ impl LineItemQueue {
 impl NumberLine {
     pub fn new() -> NumberLine {
         NumberLine {
-            max: 0,
-            min: 0,
+            head: None,
+            tail: None,
             items: vec![None; DEFAULT_INIT_CAPACITY],
             size: 0,
             capacity: DEFAULT_INIT_CAPACITY,
@@ -78,6 +79,12 @@ impl NumberLine {
     }
 
     pub fn add(&mut self, line_item: LineItem) {
+        // check capacity used rate
+        let used_percent = self.size as f64 / self.capacity as f64;
+        if used_percent >= DEFAULT_MAX_USAGE_PERCENT {
+            //TODO: resize map
+        }
+
         let index = line_item.value % self.capacity as u64;
 
         // check index
@@ -124,7 +131,14 @@ impl NumberLine {
             }
 
             // add new LIQ to the map at the index
-            self.items[index as usize] = Some(Rc::new(liq));
+            let liq_refc = Rc::new(liq);
+            // check if numberline has head or tail first
+            if self.head.is_none() {
+                self.head = Some(Rc::downgrade(&liq_refc));
+                self.tail = Some(Rc::downgrade(&liq_refc))
+            }
+
+            self.items[index as usize] = Some(liq_refc);
         }
 
         // if index is none create queue with LineItem
@@ -132,6 +146,10 @@ impl NumberLine {
         //
         // if index is not none increase size of items and
         // redo hash tableness.
+    }
+
+    fn resize() {
+        // TODO: implement
     }
 }
 
