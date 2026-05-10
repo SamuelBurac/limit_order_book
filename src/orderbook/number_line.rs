@@ -77,7 +77,7 @@ impl NumberLine {
         }
     }
 
-    pub fn add(&self, line_item: LineItem) {
+    pub fn add(&mut self, line_item: LineItem) {
         let index = line_item.value % self.capacity as u64;
 
         // check index
@@ -89,10 +89,42 @@ impl NumberLine {
                 // TODO: resize map
             }
         } else {
-            let nouQ = LineItemQueue::new(line_item);
-            //TODO: find next and previous queues
+            //create new LIQ
+            let liq = LineItemQueue::new(line_item);
 
+            // Set the next and prev queue
             // for now just iterate until hit next and prev
+
+            // forward iteration
+            let mut fidx = index as usize + 1;
+            while fidx < self.capacity {
+                if let Some(next) = self.items.index(fidx) {
+                    *liq.next_queue.borrow_mut() = Rc::downgrade(next);
+                    break;
+                }
+                fidx += 1;
+            }
+            //     INFO: logging but not performant
+            //     if (fidx == self.capacity) {
+            //     println!("No next neighbor");
+            //     }
+            // reverse iteration finding prev
+            let mut ridx = index as usize - 1;
+            while ridx > 0 {
+                if let Some(prev) = self.items.index(ridx) {
+                    *liq.prev_queue.borrow_mut() = Rc::downgrade(prev);
+                    break;
+                }
+                ridx -= 1;
+            }
+            if ridx == 0
+                && let Some(prev) = self.items.index(ridx)
+            {
+                *liq.prev_queue.borrow_mut() = Rc::downgrade(prev);
+            }
+
+            // add new LIQ to the map at the index
+            self.items[index as usize] = Some(Rc::new(liq));
         }
 
         // if index is none create queue with LineItem
