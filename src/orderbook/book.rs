@@ -14,8 +14,8 @@ use crate::orderbook::{
 };
 
 pub struct OrderBook {
-    buy_orders: SkipMap<u64, PriceLevel>,
-    sell_orders: SkipMap<u64, PriceLevel>,
+    buy_levels: SkipMap<u64, PriceLevel>,
+    sell_levels: SkipMap<u64, PriceLevel>,
     completed_transactions: HashMap<u64, Transaction>,
     completed_orders: Vec<LimitOrder>,
 }
@@ -29,8 +29,8 @@ impl Default for OrderBook {
 impl OrderBook {
     pub fn new() -> Self {
         Self {
-            buy_orders: SkipMap::new(),
-            sell_orders: SkipMap::new(),
+            buy_levels: SkipMap::new(),
+            sell_levels: SkipMap::new(),
             completed_transactions: HashMap::new(),
             completed_orders: Vec::new(),
         }
@@ -57,13 +57,13 @@ impl OrderBook {
             writeln!(
                 &mut file,
                 "- **Active Buy Orders**: {}",
-                self.buy_orders.len()
+                self.buy_levels.len()
             )
             .unwrap();
             writeln!(
                 &mut file,
                 "- **Active Sell Orders**: {}",
-                self.sell_orders.len()
+                self.sell_levels.len()
             )
             .unwrap();
             writeln!(
@@ -81,12 +81,12 @@ impl OrderBook {
 
             // Write active buy orders
             writeln!(&mut file, "## Active Buy Orders\n").unwrap();
-            if self.buy_orders.is_empty() {
+            if self.buy_levels.is_empty() {
                 writeln!(&mut file, "*No active buy orders*").unwrap();
             } else {
                 writeln!(&mut file, "|  Price level | orders |").unwrap();
                 writeln!(&mut file, "|--------|----------|").unwrap();
-                for order in self.buy_orders.values() {
+                for order in self.buy_levels.values() {
                     writeln!(
                         &mut file,
                         "|  ${:.2} | {:?} |",
@@ -99,12 +99,12 @@ impl OrderBook {
 
             // Write active sell orders
             writeln!(&mut file, "\n## Active Sell Orders\n").unwrap();
-            if self.sell_orders.is_empty() {
+            if self.sell_levels.is_empty() {
                 writeln!(&mut file, "*No active sell orders*").unwrap();
             } else {
                 writeln!(&mut file, "|  Price level | orders |").unwrap();
                 writeln!(&mut file, "|-------|----------|").unwrap();
-                for order in self.sell_orders.values() {
+                for order in self.sell_levels.values() {
                     writeln!(
                         &mut file,
                         "| {:.2} | {:?} |",
@@ -194,7 +194,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
 
             // Find the orders that are matching
             for (_, buy_level) in order_book
-                .buy_orders
+                .buy_levels
                 .range(Included(&order.price), Unbounded)
             {
                 let mut by_order = buy_level.orders.borrow_mut().pop_front();
@@ -237,7 +237,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                     by_order = buy_level.orders.borrow_mut().pop_front();
                 }
 
-                if buy_level.orders.borrow().len() == 0 {
+                if buy_level.orders.borrow().is_empty() {
                     price_levels_to_remove.push(buy_level.price);
                 }
                 if quantity_left == 0 {
@@ -247,7 +247,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
 
             // remove the price levels that have been exhausted
             for price in price_levels_to_remove {
-                order_book.buy_orders.remove(&price);
+                order_book.buy_levels.remove(&price);
             }
 
             // if the sell order completed add it to the compelted transactions
@@ -263,12 +263,12 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             } else {
                 // if the order hasn't been fulfilled then we add it to the book
                 // first look for a price level if it doesnt exist create one
-                if let Some(level) = order_book.sell_orders.get_mut(&order.price) {
+                if let Some(level) = order_book.sell_levels.get_mut(&order.price) {
                     level.orders.borrow_mut().push_back(order);
                 } else {
                     let pl = PriceLevel::new(order.price);
                     pl.orders.borrow_mut().push_back(order);
-                    order_book.sell_orders.insert(pl.price, pl);
+                    order_book.sell_levels.insert(pl.price, pl);
                 }
             }
         }
@@ -283,7 +283,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             let mut price_levels_to_remove: Vec<u64> = Vec::new();
 
             let sell_levels = order_book
-                .sell_orders
+                .sell_levels
                 .range(Unbounded, Included(&order.price));
 
             for (_, sell_level) in sell_levels {
@@ -324,7 +324,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
 
                 // if the whole level has been exhausted remove it
                 // from the book
-                if sell_level.orders.borrow().len() == 0 {
+                if sell_level.orders.borrow().is_empty() {
                     price_levels_to_remove.push(sell_level.price);
                 }
 
@@ -335,7 +335,7 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
 
             // remove the price levels that have been exhausted
             for price in price_levels_to_remove {
-                order_book.buy_orders.remove(&price);
+                order_book.sell_levels.remove(&price);
             }
 
             // if there was no sell orders fulfilled don't record the transaction
@@ -351,12 +351,12 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             } else {
                 // if the order hasn't been fulfilled then we add it to the book
                 // first look for a price level if it doesnt exist create one
-                if let Some(level) = order_book.buy_orders.get_mut(&order.price) {
+                if let Some(level) = order_book.buy_levels.get_mut(&order.price) {
                     level.orders.borrow_mut().push_back(order);
                 } else {
                     let pl = PriceLevel::new(order.price);
                     pl.orders.borrow_mut().push_back(order);
-                    order_book.buy_orders.insert(pl.price, pl);
+                    order_book.buy_levels.insert(pl.price, pl);
                 }
             }
         }
