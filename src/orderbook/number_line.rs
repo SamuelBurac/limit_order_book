@@ -101,6 +101,10 @@ impl NumberLine {
 
             // Set the next and prev queue
             // for now just iterate until hit next and prev
+            // BUG: This doesn't work things will mod to
+            // indexes that aren't ordered so this approach doesn't
+            // reall work.
+            // Maybe I was just trying to build a skip map but did't realize it
 
             // forward iteration
             let mut fidx = index as usize + 1;

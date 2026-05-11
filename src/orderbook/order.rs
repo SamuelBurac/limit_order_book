@@ -1,10 +1,12 @@
 use crate::orderbook::side::Side;
+use std::cell::RefCell;
 
+#[derive(Debug)]
 pub struct LimitOrder {
     pub order_id: u64,
     pub side: Side,
-    pub price: u128,
-    pub quantity: u64,
+    pub price: u64,
+    pub quantity: RefCell<u64>,
 }
 impl LimitOrder {}
 
@@ -14,7 +16,7 @@ impl Clone for LimitOrder {
             order_id: self.order_id,
             side: self.side.clone(),
             price: self.price,
-            quantity: self.quantity,
+            quantity: self.quantity.clone(),
         }
     }
 }

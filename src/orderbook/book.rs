@@ -1,14 +1,21 @@
 // This will hold all the orders and execute trades?
 
-use std::{collections::HashMap, fs::File, io::Write};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::Write,
+    ops::Bound::{Included, Unbounded},
+};
 
 use skiplist::SkipMap;
 
-use crate::orderbook::{order::LimitOrder, side::Side, transaction::Transaction};
+use crate::orderbook::{
+    order::LimitOrder, price_level::PriceLevel, side::Side, transaction::Transaction,
+};
 
 pub struct OrderBook {
-    buy_orders: SkipMap<u64, LimitOrder>,
-    sell_orders: SkipMap<u64, LimitOrder>,
+    buy_orders: SkipMap<u64, PriceLevel>,
+    sell_orders: SkipMap<u64, PriceLevel>,
     completed_transactions: HashMap<u64, Transaction>,
     completed_orders: Vec<LimitOrder>,
 }
@@ -77,16 +84,14 @@ impl OrderBook {
             if self.buy_orders.is_empty() {
                 writeln!(&mut file, "*No active buy orders*").unwrap();
             } else {
-                writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
-                writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
+                writeln!(&mut file, "|  Price level | orders |").unwrap();
+                writeln!(&mut file, "|--------|----------|").unwrap();
                 for order in self.buy_orders.values() {
                     writeln!(
                         &mut file,
-                        "| {} | {:?} | ${:.2} | {} |",
-                        order.order_id,
-                        order.side,
+                        "|  ${:.2} | {:?} |",
                         order.price as f64 / 100.0,
-                        order.quantity
+                        order.orders
                     )
                     .unwrap();
                 }
@@ -97,16 +102,14 @@ impl OrderBook {
             if self.sell_orders.is_empty() {
                 writeln!(&mut file, "*No active sell orders*").unwrap();
             } else {
-                writeln!(&mut file, "| Order ID | Side | Price | Quantity |").unwrap();
-                writeln!(&mut file, "|----------|------|-------|----------|").unwrap();
+                writeln!(&mut file, "|  Price level | orders |").unwrap();
+                writeln!(&mut file, "|-------|----------|").unwrap();
                 for order in self.sell_orders.values() {
                     writeln!(
                         &mut file,
-                        "| {} | {:?} | ${:.2} | {} |",
-                        order.order_id,
-                        order.side,
+                        "| {:.2} | {:?} |",
                         order.price as f64 / 100.0,
-                        order.quantity
+                        order.orders
                     )
                     .unwrap();
                 }
@@ -126,7 +129,7 @@ impl OrderBook {
                         order.order_id,
                         order.side,
                         order.price as f64 / 100.0,
-                        order.quantity
+                        order.quantity.borrow()
                     )
                     .unwrap();
                 }
@@ -183,74 +186,71 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
             let mut transaction = Transaction::new();
             transaction.sell_order_ids.push(order.order_id);
 
-            let starting_quantity = order.quantity;
+            let starting_quantity = *order.quantity.borrow();
             let mut quantity_sold = 0;
+            let mut quantity_left = starting_quantity;
 
-            // partially fulfilled order
-            let mut partially_filled_order_id: Option<u64> = None;
-            let mut partial_quantity_fulfilled: u64 = 0;
-
-            let mut order_ids_to_remove: Vec<u64> = Vec::new();
-
-            // I assume they're ordered in most to least?
-            // Also if I'm doing filtering why even use a skiplist?
-            // would probably be better if I also did binary search to have match_orders be O(log n)
-            let buy_orders = order_book
-                .buy_orders
-                .values()
-                .filter(|buy| buy.price > order.price);
+            let mut price_levels_to_remove: Vec<u64> = Vec::new();
 
             // Find the orders that are matching
-            for buy_order in buy_orders {
-                let quantity_left = starting_quantity - quantity_sold;
+            for (_, buy_level) in order_book
+                .buy_orders
+                .range(Included(&order.price), Unbounded)
+            {
+                let mut by_order = buy_level.orders.borrow_mut().pop_front();
+                while by_order.is_some() {
+                    if let Some(mut buy_order) = by_order {
+                        if quantity_left == 0 {
+                            break;
+                        }
+
+                        let buy_order_quantity = *buy_order.quantity.borrow();
+
+                        if quantity_left >= buy_order_quantity {
+                            // Fullfilling the whole buy order
+                            quantity_sold += buy_order_quantity;
+                            quantity_left -= buy_order_quantity;
+
+                            // fulfill order
+                            transaction.buy_order_ids.push(buy_order.order_id);
+                            order_book.completed_orders.push(buy_order);
+                        } else if quantity_left < buy_order_quantity {
+                            // Fulfilling it partially
+                            // one sell order can only partially fill one buy order
+                            // otherwise it would've fulfilled the whole order.
+                            quantity_sold += quantity_left;
+
+                            // add to transaction
+                            transaction.buy_order_ids.push(buy_order.order_id);
+
+                            //update order to remove the remaining quantities to round
+                            //out the order
+                            *buy_order.quantity.get_mut() -= quantity_left;
+
+                            // since the full buy order wasn't completed
+                            // put back to the front
+                            buy_level.orders.borrow_mut().push_front(buy_order);
+
+                            quantity_left = 0;
+                        }
+                    }
+                    by_order = buy_level.orders.borrow_mut().pop_front();
+                }
+
+                if buy_level.orders.borrow().len() == 0 {
+                    price_levels_to_remove.push(buy_level.price);
+                }
                 if quantity_left == 0 {
                     break;
                 }
-
-                let buy_order_quantity = buy_order.quantity;
-
-                // Fullfilling the whole buy order
-                if quantity_left >= buy_order_quantity {
-                    quantity_sold += buy_order_quantity;
-
-                    order_ids_to_remove.push(buy_order.order_id);
-
-                    // Fulfilling it partially
-                    // one sell order can only partially fill one buy order
-                    // otherwise it would've fulfilled the whole order.
-                } else if quantity_left < buy_order_quantity {
-                    quantity_sold += quantity_left;
-                    partial_quantity_fulfilled = quantity_left;
-                    partially_filled_order_id = Some(buy_order.order_id);
-                }
             }
 
-            // update the partially filled order
-            if let Some(order_id) = partially_filled_order_id {
-                // Get order
-                if let Some(mut order) = order_book.buy_orders.remove(&order_id) {
-                    // add to transaction
-                    transaction.buy_order_ids.push(order.order_id);
-                    //update order
-                    order.quantity -= partial_quantity_fulfilled;
-
-                    // Add back to orders
-                    order_book.buy_orders.insert(order.order_id, order);
-                } else {
-                    tracing::error!("Failed to remove order");
-                }
+            // remove the price levels that have been exhausted
+            for price in price_levels_to_remove {
+                order_book.buy_orders.remove(&price);
             }
 
-            // fulfill the order
-            for order_id in order_ids_to_remove {
-                if let Some(completed_order) = order_book.buy_orders.remove(&order_id) {
-                    transaction.buy_order_ids.push(completed_order.order_id);
-                    order_book.completed_orders.push(completed_order);
-                } else {
-                    tracing::error!("Failed to remove order");
-                }
-            }
-
+            // if the sell order completed add it to the compelted transactions
             if !transaction.buy_order_ids.is_empty() {
                 order_book
                     .completed_transactions
@@ -261,72 +261,81 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 // completed this sell order fully
                 order_book.completed_orders.push(order);
             } else {
-                order_book.sell_orders.insert(order.order_id, order);
+                // if the order hasn't been fulfilled then we add it to the book
+                // first look for a price level if it doesnt exist create one
+                if let Some(level) = order_book.sell_orders.get_mut(&order.price) {
+                    level.orders.borrow_mut().push_back(order);
+                } else {
+                    let pl = PriceLevel::new(order.price);
+                    pl.orders.borrow_mut().push_back(order);
+                    order_book.sell_orders.insert(pl.price, pl);
+                }
             }
         }
         Side::Buy => {
             let mut transaction = Transaction::new();
             transaction.buy_order_ids.push(order.order_id);
 
-            let starting_quantity = order.quantity;
+            let starting_quantity = *order.quantity.borrow();
             let mut quantity_sold = 0;
+            let mut quantity_left = starting_quantity;
 
-            // partially fulfilled order
-            let mut partially_filled_order_id: Option<u64> = None;
-            let mut partial_quantity_fulfilled: u64 = 0;
+            let mut price_levels_to_remove: Vec<u64> = Vec::new();
 
-            let mut order_ids_to_remove: Vec<u64> = Vec::new();
-
-            // I assume they're ordered in most to least?
-            // Also if I'm doing filtering why even use a skiplist?
-            // would probably be better if I also did binary search to have match_orders be O(log n)
-            let sell_orders = order_book
+            let sell_levels = order_book
                 .sell_orders
-                .values()
-                .rev()
-                .filter(|sell| sell.price < order.price);
+                .range(Unbounded, Included(&order.price));
 
-            for sell_order in sell_orders {
-                let quantity_left = starting_quantity - quantity_sold;
+            for (_, sell_level) in sell_levels {
+                let mut s_order = sell_level.orders.borrow_mut().pop_front();
+                while s_order.is_some() {
+                    if let Some(sell_order) = s_order {
+                        if quantity_left == 0 {
+                            break;
+                        }
+                        let buy_order_quantity = *sell_order.quantity.borrow();
+
+                        // Fullfilling the whole buy order
+                        if quantity_left >= buy_order_quantity {
+                            quantity_sold += buy_order_quantity;
+                            quantity_left -= buy_order_quantity;
+
+                            transaction.buy_order_ids.push(sell_order.order_id);
+                            order_book.completed_orders.push(sell_order);
+                        } else if quantity_left < buy_order_quantity {
+                            quantity_sold += quantity_left;
+
+                            // add to transaction
+                            transaction.sell_order_ids.push(order.order_id);
+
+                            //update order
+                            *sell_order.quantity.borrow_mut() -= quantity_left;
+
+                            // need to add the order backt to the level
+                            sell_level.orders.borrow_mut().push_front(sell_order);
+
+                            // A sell order can only be fulfilled partially
+                            // if if fulfills the whole buy order quantity
+                            quantity_left = 0;
+                        }
+                    }
+                    s_order = sell_level.orders.borrow_mut().pop_front();
+                }
+
+                // if the whole level has been exhausted remove it
+                // from the book
+                if sell_level.orders.borrow().len() == 0 {
+                    price_levels_to_remove.push(sell_level.price);
+                }
+
                 if quantity_left == 0 {
                     break;
                 }
-                let buy_order_quantity = sell_order.quantity;
-
-                // Fullfilling the whole buy order
-                if quantity_left >= buy_order_quantity {
-                    quantity_sold += buy_order_quantity;
-
-                    order_ids_to_remove.push(sell_order.order_id);
-                } else if quantity_left < buy_order_quantity {
-                    quantity_sold += quantity_left;
-                    partial_quantity_fulfilled = quantity_left;
-                    partially_filled_order_id = Some(sell_order.order_id);
-                }
             }
 
-            // update the partially filled order
-            if let Some(order_id) = partially_filled_order_id {
-                // Get order
-                if let Some(mut order) = order_book.sell_orders.remove(&order_id) {
-                    // add to transaction
-                    transaction.sell_order_ids.push(order.order_id);
-
-                    //update order
-                    order.quantity -= partial_quantity_fulfilled;
-
-                    // Add back to orders
-                    order_book.sell_orders.insert(order.order_id, order);
-                }
-            }
-
-            // fulfill the order
-            for order_id in order_ids_to_remove {
-                if let Some(completed_order) = order_book.buy_orders.remove(&order_id) {
-                    transaction.buy_order_ids.push(completed_order.order_id);
-
-                    order_book.completed_orders.push(completed_order);
-                }
+            // remove the price levels that have been exhausted
+            for price in price_levels_to_remove {
+                order_book.buy_orders.remove(&price);
             }
 
             // if there was no sell orders fulfilled don't record the transaction
@@ -340,7 +349,15 @@ fn match_orders(order_book: &mut OrderBook, order: LimitOrder) {
                 // completed this sell order fully
                 order_book.completed_orders.push(order);
             } else {
-                order_book.buy_orders.insert(order.order_id, order);
+                // if the order hasn't been fulfilled then we add it to the book
+                // first look for a price level if it doesnt exist create one
+                if let Some(level) = order_book.buy_orders.get_mut(&order.price) {
+                    level.orders.borrow_mut().push_back(order);
+                } else {
+                    let pl = PriceLevel::new(order.price);
+                    pl.orders.borrow_mut().push_back(order);
+                    order_book.buy_orders.insert(pl.price, pl);
+                }
             }
         }
     }

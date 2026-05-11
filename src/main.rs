@@ -4,6 +4,8 @@ use chrono::{DateTime, Local};
 use rand::{RngExt, random_bool};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::cell::RefCell;
+
 use crate::orderbook::{book::OrderBook, side::Side};
 
 use tracing_subscriber::FmtSubscriber;
@@ -47,19 +49,20 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             Side::Buy
         };
-
-        orderbook.add_order(orderbook::order::LimitOrder {
+        let order = orderbook::order::LimitOrder {
             order_id: i,
             side,
             price,
-            quantity,
-        });
+            quantity: RefCell::new(quantity),
+        };
+
+        orderbook.add_order(order);
     }
 
     let end_time = SystemTime::now();
     let time_since = end_time.duration_since(start_time);
     //Timestamp when ending
-    println!("Ending simuliation {:?}", time_since);
+    println!("Ending simulation it took {:?}", time_since);
 
     // write orderbook state to file with timestamp
     let timestamp = end_time.duration_since(UNIX_EPOCH).unwrap().as_secs();
